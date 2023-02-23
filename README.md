@@ -1,2 +1,2 @@
-# CDK for CloudFormation
+# CLI/CDK for CloudFormation
 [...]
