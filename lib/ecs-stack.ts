@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 // extend the props of the stack by adding the vpc type from the SharedInfraStack
@@ -10,6 +11,8 @@ export interface EcsStackProps extends cdk.StackProps {
 }
 
 export class EcsStack extends cdk.Stack {
+    public readonly service: ecs.FargateService;
+
     private vpc: ec2.Vpc;
 
     constructor(scope: Construct, id: string, props: EcsStackProps) {
@@ -42,5 +45,7 @@ export class EcsStack extends cdk.Stack {
             assignPublicIp: false,
             vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
         });
+
+        this.service = service;
     }
 }

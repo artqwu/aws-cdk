@@ -4,6 +4,7 @@ import * as cdk from 'aws-cdk-lib';
 import { SrcStack } from '../lib/src-stack';
 import { VpcStack } from '../lib/vpc-stack';
 import { EcsStack } from '../lib/ecs-stack';
+import { AlbStack } from '../lib/alb-stack';
 
 const app = new cdk.App();
 new SrcStack(app, 'SrcStack', {
@@ -22,7 +23,7 @@ new SrcStack(app, 'SrcStack', {
   /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
 });
 
-const infra = new VpcStack(app, 'VpcStack', {
+const infraStack = new VpcStack(app, 'VpcStack', {
   /* If you don't specify 'env', this stack will be environment-agnostic.
    * Account/Region-dependent features and context lookups will not work,
    * but a single synthesized template can be deployed anywhere. */
@@ -38,6 +39,11 @@ const infra = new VpcStack(app, 'VpcStack', {
   /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
 });
 
-new EcsStack(app, 'EcsStack', {
-  vpc: infra.vpc
+const ecsStack = new EcsStack(app, 'EcsStack', {
+  vpc: infraStack.vpc
+});
+
+new AlbStack(app, 'AlbStack', {
+  vpc: infraStack.vpc,
+  ecsService: ecsStack.service
 });
