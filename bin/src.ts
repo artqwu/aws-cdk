@@ -23,17 +23,6 @@ new SrcStack(app, 'SrcStack', {
   /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
 });
 
-const infraStack = new VpcStack(app, 'VpcStack', {
-  env: { account: '962199888341', region: 'us-east-2' }
-});
-
 const ecsStack = new EcsStack(app, 'EcsStack', {
-  env: { account: '962199888341', region: 'us-east-2' },
-  vpc: infraStack.vpc
-});
-
-new AlbStack(app, 'AlbStack', {
-  env: { account: '962199888341', region: 'us-east-2' },
-  vpc: infraStack.vpc,
-  ecsService: ecsStack.service
+  env: { account: '962199888341', region: 'us-east-2' }
 });
