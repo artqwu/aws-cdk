@@ -1,8 +1,9 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
-import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 // extend the props of the stack by adding the vpc type from the SharedInfraStack
@@ -32,8 +33,12 @@ export class EcsStack extends cdk.Stack {
         });
 
         // Add a container to the task definition
+        const repo = ecr.Repository.fromRepositoryName(this, 'tdd-ecr', 'web-service');
+        const tag = 'latest';
+        const image = ecs.ContainerImage.fromEcrRepository(repo, tag);
+
         const container = taskDefinition.addContainer('WebServiceContainer', {
-            image: ecs.ContainerImage.fromRegistry('web-service'),
+            image: image,
             portMappings: [{ containerPort: 443 }],
         });
 

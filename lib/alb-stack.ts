@@ -44,7 +44,7 @@ export class AlbStack extends cdk.Stack {
             targetType: elbv2.TargetType.IP,
             healthCheck: {
                 enabled: true,
-                path: 'app',
+                path: '/app',
             }
         });
 
