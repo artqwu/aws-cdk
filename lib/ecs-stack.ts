@@ -27,7 +27,7 @@ export class EcsStack extends cdk.Stack {
                 subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
                 cidrMask: 24,
               }
-            ],
+            ]
           });
 
           const cluster = new ecs.Cluster(this, "WebServiceCluster", {
