@@ -8,27 +8,20 @@ import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { Construct } from 'constructs';
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
 
-export class SrcStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+// extend the props of the stack by adding the vpc type from the SharedInfraStack
+export interface FargateStackProps extends cdk.StackProps {
+  vpc: ec2.Vpc;
+}
+
+export class FargateStack extends cdk.Stack {
+  private vpc: ec2.Vpc;
+
+  constructor(scope: Construct, id: string, props: FargateStackProps) {
     super(scope, id, props);
 
     // The code that defines your stack goes here
-    const vpc = new ec2.Vpc(this, "MyVpc", {
-      maxAzs: 2,
-      subnetConfiguration: [
-        {
-          name: 'Public',
-          subnetType: ec2.SubnetType.PUBLIC
-        },
-        {
-          name: 'Private',
-          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS
-        }
-      ]
-    });
-
     const cluster = new ecs.Cluster(this, "WebServiceCluster", {
-      vpc: vpc
+      vpc: props.vpc
     });
 
     const repo = ecr.Repository.fromRepositoryName(this, 'tdd-ecr', 'web-service');

@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
-import { SrcStack } from '../lib/src-stack';
 import { VpcStack } from '../lib/vpc-stack';
-import { EcsStack } from '../lib/ecs-stack';
-import { AlbStack } from '../lib/alb-stack';
+import { FargateStack } from '../lib/fargate-stack';
 
 const app = new cdk.App();
-new SrcStack(app, 'SrcStack', {
+const vpcStack = new VpcStack(app, 'VpcStack', {
   /* If you don't specify 'env', this stack will be environment-agnostic.
    * Account/Region-dependent features and context lookups will not work,
    * but a single synthesized template can be deployed anywhere. */
@@ -22,8 +20,8 @@ new SrcStack(app, 'SrcStack', {
 
   /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
 });
-/*
-const ecsStack = new EcsStack(app, 'EcsStack', {
-  env: { account: '962199888341', region: 'us-east-2' }
+
+new FargateStack(app, 'FargateStack', {
+  env: { account: '962199888341', region: 'us-east-2' },
+  vpc: vpcStack.vpc
 });
-*/
