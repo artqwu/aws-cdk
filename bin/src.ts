@@ -22,12 +22,8 @@ const vpcStack = new VpcStack(app, 'VpcStack', {
   /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
 });
 
-new FargateStack(app, 'FargateStack', {
+const ecsCluster = new FargateStack(app, 'FargateStack', {
   env: { account: '962199888341', region: 'us-east-2' },
   vpc: vpcStack.vpc
 });
 
-new RdsStack(app, 'RdsStack', {
-  env: { account: '962199888341', region: 'us-east-2' },
-  vpc: vpcStack.vpc
-});

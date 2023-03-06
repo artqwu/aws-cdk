@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as ecs_patterns from "aws-cdk-lib/aws-ecs-patterns";
 import * as rds from 'aws-cdk-lib/aws-rds';
 
 import { Construct } from 'constructs';
@@ -8,6 +9,7 @@ import { Construct } from 'constructs';
 // extend the props of the stack by adding the vpc type from the SharedInfraStack
 export interface RdsStackProps extends cdk.StackProps {
     vpc: ec2.Vpc;
+    ecsCluster: ecs_patterns.ApplicationLoadBalancedFargateService;
 }
 
 export class RdsStack extends cdk.Stack {
@@ -50,5 +52,6 @@ export class RdsStack extends cdk.Stack {
             publiclyAccessible: false,
         });
 
+        instance.connections.allowFrom(props.ecsCluster.service, tcp3306, 'allow from ecs service');
     }
 }
