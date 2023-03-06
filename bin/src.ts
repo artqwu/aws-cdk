@@ -3,6 +3,7 @@ import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { VpcStack } from '../lib/vpc-stack';
 import { FargateStack } from '../lib/fargate-stack';
+import { RdsStack } from '../lib/rds-stack';
 
 const app = new cdk.App();
 const vpcStack = new VpcStack(app, 'VpcStack', {
@@ -22,6 +23,11 @@ const vpcStack = new VpcStack(app, 'VpcStack', {
 });
 
 new FargateStack(app, 'FargateStack', {
+  env: { account: '962199888341', region: 'us-east-2' },
+  vpc: vpcStack.vpc
+});
+
+new RdsStack(app, 'RdsStack', {
   env: { account: '962199888341', region: 'us-east-2' },
   vpc: vpcStack.vpc
 });
