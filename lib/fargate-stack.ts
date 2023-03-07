@@ -88,6 +88,10 @@ export class FargateStack extends cdk.Stack {
       memoryLimitMiB: 16384,
     });
 
+    const logDriver = ecs.LogDriver.awsLogs({
+      streamPrefix: 'web-service'
+    });
+
     const container = taskDefinition.addContainer('MyContainer', {
       cpu: 4096, // Default is 256
       image: image,
@@ -100,6 +104,7 @@ export class FargateStack extends cdk.Stack {
         RDS_USERNAME: 'myuser',
         RDS_PASSWORD: 'mypassword',
       },
+      logging: logDriver
     });
 
     // Create a load-balanced Fargate service and make it public
