@@ -2,8 +2,7 @@
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { VpcStack } from '../lib/vpc-stack';
-import { FargateStack } from '../lib/fargate-stack';
-import { RdsStack } from '../lib/rds-stack';
+import { WebServiceStack } from '../lib/web-service-stack';
 
 const app = new cdk.App();
 const vpcStack = new VpcStack(app, 'VpcStack', {
@@ -22,8 +21,7 @@ const vpcStack = new VpcStack(app, 'VpcStack', {
   /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
 });
 
-const ecsCluster = new FargateStack(app, 'FargateStack', {
+const ecsCluster = new WebServiceStack(app, 'WebServiceStack', {
   env: { account: '962199888341', region: 'us-east-2' },
   vpc: vpcStack.vpc
 });
-

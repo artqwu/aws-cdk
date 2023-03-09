@@ -20,7 +20,8 @@ export class VpcStack extends cdk.Stack {
           name: 'Private',
           subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS
         }
-      ]
+      ],
+      natGateways: 1,
     });
 
     this.vpc = vpc;
