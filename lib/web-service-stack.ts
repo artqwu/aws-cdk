@@ -22,11 +22,8 @@ export class WebServiceStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props: WebServiceStackProps) {
     super(scope, id, props);
-    const account: string = props.env? (props.env.account || '') : (process.env.CDK_DEFAULT_ACCOUNT || '');
+    const account: string = props.env ? (props.env.account || '') : (process.env.CDK_DEFAULT_ACCOUNT || '');
     const envConfig: IEnvironmentConfig = scope.node.tryGetContext(account);
-
-    const cpu = 4096; // Default is 256
-    const memoryLimitMiB = 16384;
 
     // Use SQS managed server side encryption (SSE-SQS)
     const generateMenuQueue = new sqs.Queue(this, 'generate_menu', {
@@ -42,23 +39,42 @@ export class WebServiceStack extends cdk.Stack {
       visibilityTimeout: cdk.Duration.seconds(30)
     });
 
-    const rdsInstance = new rds.DatabaseInstance(this, 'SymfonyDb', {
-      engine: rds.DatabaseInstanceEngine.mysql({
-        version: rds.MysqlEngineVersion.VER_5_7_38,
-      }),
-      backupRetention: cdk.Duration.days(7),
-      allocatedStorage: 20,
-      // optional, defaults to m5.large
-      // instanceType: ec2.InstanceType.of(ec2.InstanceClass.BURSTABLE3, ec2.InstanceSize.SMALL),
-      credentials: rds.Credentials.fromGeneratedSecret('admin'), // Optional - will default to 'admin' username and generated password
-      vpc: props.vpc,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-      storageEncrypted: true,
-      monitoringInterval: cdk.Duration.seconds(60),
-      publiclyAccessible: false,
-    });
+    const ecsTaskRole = this.createEcsTaskRole_();
 
-    // Create ECS task execution role provisioned for ECS Exec connection
+    const loadBalancedFargateService = this.createLoadBalancedFargateService_(
+      this,
+      props.vpc,
+      ecsTaskRole,
+      envConfig,
+      generateMenuQueue.queueUrl,
+      generateMenuPriorityQueue.queueUrl,
+      generateMenuAlternativesQueue.queueUrl
+    );
+
+    // create a bastion host
+    const host = new ec2.BastionHostLinux(this, 'BastionHost', {
+      vpc: props.vpc,
+      subnetSelection: { subnetType: ec2.SubnetType.PUBLIC },
+    });
+    // host.allowSshAccessFrom(ec2.Peer.ipv4('24.147.56.174/32'));
+    host.allowSshAccessFrom(ec2.Peer.ipv4('0.0.0.0/0'));
+
+    this.createARecord_(envConfig.hostedZoneId, envConfig.domain, loadBalancedFargateService.loadBalancer);
+
+    const rdsInstance = this.createRdsInstance_(this, props.vpc);
+    rdsInstance.grantConnect(ecsTaskRole);
+    const tcp3306 = ec2.Port.tcpRange(3306, 3306);
+    rdsInstance.connections.allowFrom(loadBalancedFargateService.service, tcp3306, 'allow from ecs service');
+    rdsInstance.connections.allowFrom(host, tcp3306, 'allow from bastion host');
+
+    this.cluster = loadBalancedFargateService;
+  }
+
+  /**
+   * Create ECS task role provisioned for ECS Exec connection
+   * @returns
+   */
+  createEcsTaskRole_(): iam.Role {
     const taskRole = new iam.Role(this, 'EcsTaskRole', {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
     });
@@ -76,11 +92,43 @@ export class WebServiceStack extends cdk.Stack {
       ],
       effect: iam.Effect.ALLOW
     }));
-    rdsInstance.grantConnect(taskRole);
 
-    // The code that defines your stack goes here
+    return taskRole;
+  }
+
+  createRdsInstance_(scope: Construct, vpc: ec2.IVpc): rds.DatabaseInstance {
+    return new rds.DatabaseInstance(scope, 'SymfonyDb', {
+      engine: rds.DatabaseInstanceEngine.mysql({
+        version: rds.MysqlEngineVersion.VER_5_7_38,
+      }),
+      backupRetention: cdk.Duration.days(7),
+      allocatedStorage: 20,
+      // optional, defaults to m5.large
+      // instanceType: ec2.InstanceType.of(ec2.InstanceClass.BURSTABLE3, ec2.InstanceSize.SMALL),
+      credentials: rds.Credentials.fromGeneratedSecret('admin'), // Optional - will default to 'admin' username and generated password
+      vpc,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      storageEncrypted: true,
+      monitoringInterval: cdk.Duration.seconds(60),
+      publiclyAccessible: false,
+    });
+  }
+
+  createLoadBalancedFargateService_(
+    scope: Construct,
+    vpc: ec2.IVpc,
+    taskRole: iam.Role,
+    envConfig: IEnvironmentConfig,
+    generateMenuQueueUrl: string,
+    generateMenuPriorityQueueUrl: string,
+    generateMenuAlternativesQueueUrl: string
+  ): ecs_patterns.ApplicationLoadBalancedFargateService {
+    const cpu = 4096; // Default is 256
+    const memoryLimitMiB = 16384;
+    const taskCount = 2;
+
     const cluster = new ecs.Cluster(this, "WebServiceCluster", {
-      vpc: props.vpc
+      vpc
     });
 
     const repo = ecr.Repository.fromRepositoryName(this, 'tdd-ecr', 'web-service');
@@ -105,20 +153,20 @@ export class WebServiceStack extends cdk.Stack {
       environment: {
         AWS_KEY_ID: process.env.AWS_KEY_ID || '',
         AWS_KEY_SECRET: process.env.AWS_KEY_SECRET || '',
-        MENU_GENERATE_QUEUE_URL: generateMenuQueue.queueUrl,
-        MENU_GENERATE_PRIORITY_QUEUE_URL: generateMenuPriorityQueue.queueUrl,
-        MENU_GENERATE_ALTERNATIVES_QUEUE_URL: generateMenuAlternativesQueue.queueUrl,
+        MENU_GENERATE_QUEUE_URL: generateMenuQueueUrl,
+        MENU_GENERATE_PRIORITY_QUEUE_URL: generateMenuPriorityQueueUrl,
+        MENU_GENERATE_ALTERNATIVES_QUEUE_URL: generateMenuAlternativesQueueUrl,
       },
       logging: logDriver
     });
 
     // Create a load-balanced Fargate service and make it public
     const loadBalancedFargateService = new ecs_patterns.ApplicationLoadBalancedFargateService(this, "WebService", {
-      cluster: cluster, // Required
-      desiredCount: 2, // Default is 1
-      taskDefinition: taskDefinition,
+      cluster, // Required
+      desiredCount: taskCount, // Default is 1
+      taskDefinition,
       publicLoadBalancer: true, // Default is true
-      certificate: certificate,
+      certificate,
       protocol: elbv2.ApplicationProtocol.HTTPS,
       targetProtocol: elbv2.ApplicationProtocol.HTTPS
     });
@@ -127,29 +175,26 @@ export class WebServiceStack extends cdk.Stack {
       path: "/app",
     });
 
-    // create a bastion host
-    const host = new ec2.BastionHostLinux(this, 'BastionHost', {
-      vpc: props.vpc,
-      subnetSelection: { subnetType: ec2.SubnetType.PUBLIC },
-    });
-    // host.allowSshAccessFrom(ec2.Peer.ipv4('24.147.56.174/32'));
-    host.allowSshAccessFrom(ec2.Peer.ipv4('0.0.0.0/0'));
+    return loadBalancedFargateService;
+  }
 
+  /**
+   * creates A record for the load balancer
+   * @param hostedZoneId
+   * @param domain
+   * @param loadBalancer
+   */
+  createARecord_(hostedZoneId: string, domain: string, loadBalancer: elbv2.ILoadBalancerV2): void {
     const hostedZone = route53.PublicHostedZone.fromPublicHostedZoneAttributes(this, 'WebServiceHostedZone', {
-      hostedZoneId: envConfig.hostedZoneId,
-      zoneName: envConfig.domain,
+      hostedZoneId: hostedZoneId,
+      zoneName: domain,
     });
+
     // Define the A record
-       new route53.ARecord(this, 'WebServiceARecord', {
+    new route53.ARecord(this, 'WebServiceARecord', {
       zone: hostedZone,
-      recordName: envConfig.domain,
-      target: route53.RecordTarget.fromAlias(new targets.LoadBalancerTarget(loadBalancedFargateService.loadBalancer)),
+      recordName: domain,
+      target: route53.RecordTarget.fromAlias(new targets.LoadBalancerTarget(loadBalancer))
     });
-
-    const tcp3306 = ec2.Port.tcpRange(3306, 3306);
-    rdsInstance.connections.allowFrom(loadBalancedFargateService.service, tcp3306, 'allow from ecs service');
-    rdsInstance.connections.allowFrom(host, tcp3306, 'allow from bastion host');
-
-    this.cluster = loadBalancedFargateService;
   }
 }
