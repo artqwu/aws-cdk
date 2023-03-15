@@ -6,6 +6,8 @@ import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as ecs_patterns from "aws-cdk-lib/aws-ecs-patterns";
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as targets from 'aws-cdk-lib/aws-route53-targets';
@@ -19,6 +21,7 @@ export interface WebServiceStackProps extends cdk.StackProps {
 }
 export class WebServiceStack extends cdk.Stack {
   public readonly cluster: ecs_patterns.ApplicationLoadBalancedFargateService;
+  private sqsTimeout: number = 300;
 
   constructor(scope: Construct, id: string, props: WebServiceStackProps) {
     super(scope, id, props);
@@ -28,21 +31,20 @@ export class WebServiceStack extends cdk.Stack {
     // Use SQS managed server side encryption (SSE-SQS)
     const generateMenuQueue = new sqs.Queue(this, 'generate_menu', {
       encryption: sqs.QueueEncryption.SQS_MANAGED,
-      visibilityTimeout: cdk.Duration.seconds(30)
+      visibilityTimeout: cdk.Duration.seconds(this.sqsTimeout)
     });
     const generateMenuPriorityQueue = new sqs.Queue(this, 'generate_menu_priority', {
       encryption: sqs.QueueEncryption.SQS_MANAGED,
-      visibilityTimeout: cdk.Duration.seconds(30)
+      visibilityTimeout: cdk.Duration.seconds(this.sqsTimeout)
     });
     const generateMenuAlternativesQueue = new sqs.Queue(this, 'generate_menu_alternatives', {
       encryption: sqs.QueueEncryption.SQS_MANAGED,
-      visibilityTimeout: cdk.Duration.seconds(30)
+      visibilityTimeout: cdk.Duration.seconds(this.sqsTimeout)
     });
 
     const ecsTaskRole = this.createEcsTaskRole_();
 
     const loadBalancedFargateService = this.createLoadBalancedFargateService_(
-      this,
       props.vpc,
       ecsTaskRole,
       envConfig,
@@ -61,11 +63,20 @@ export class WebServiceStack extends cdk.Stack {
 
     this.createARecord_(envConfig.hostedZoneId, envConfig.domain, loadBalancedFargateService.loadBalancer);
 
-    const rdsInstance = this.createRdsInstance_(this, props.vpc);
+    const menuGenerateConsumer = this.createMenuGenerateConsumer_(
+      props.vpc,
+      envConfig.imageTag,
+      generateMenuQueue,
+      generateMenuPriorityQueue,
+      generateMenuAlternativesQueue
+    );
+
+    const rdsInstance = this.createRdsInstance_(props.vpc);
     rdsInstance.grantConnect(ecsTaskRole);
     const tcp3306 = ec2.Port.tcpRange(3306, 3306);
     rdsInstance.connections.allowFrom(loadBalancedFargateService.service, tcp3306, 'allow from ecs service');
     rdsInstance.connections.allowFrom(host, tcp3306, 'allow from bastion host');
+    rdsInstance.connections.allowFrom(menuGenerateConsumer, tcp3306, 'allow from menu generate lambda');
 
     this.cluster = loadBalancedFargateService;
   }
@@ -96,8 +107,8 @@ export class WebServiceStack extends cdk.Stack {
     return taskRole;
   }
 
-  createRdsInstance_(scope: Construct, vpc: ec2.IVpc): rds.DatabaseInstance {
-    return new rds.DatabaseInstance(scope, 'SymfonyDb', {
+  createRdsInstance_(vpc: ec2.IVpc): rds.DatabaseInstance {
+    return new rds.DatabaseInstance(this, 'SymfonyDb', {
       engine: rds.DatabaseInstanceEngine.mysql({
         version: rds.MysqlEngineVersion.VER_5_7_38,
       }),
@@ -115,7 +126,6 @@ export class WebServiceStack extends cdk.Stack {
   }
 
   createLoadBalancedFargateService_(
-    scope: Construct,
     vpc: ec2.IVpc,
     taskRole: iam.Role,
     envConfig: IEnvironmentConfig,
@@ -131,7 +141,7 @@ export class WebServiceStack extends cdk.Stack {
       vpc
     });
 
-    const repo = ecr.Repository.fromRepositoryName(this, 'tdd-ecr', 'web-service');
+    const repo = ecr.Repository.fromRepositoryName(this, 'ecr-web-service', 'web-service');
     const image = ecs.ContainerImage.fromEcrRepository(repo, envConfig.imageTag);
     const certificate = acm.Certificate.fromCertificateArn(this, 'Certificate', envConfig.certArn);
 
@@ -196,5 +206,45 @@ export class WebServiceStack extends cdk.Stack {
       recordName: domain,
       target: route53.RecordTarget.fromAlias(new targets.LoadBalancerTarget(loadBalancer))
     });
+  }
+
+  createMenuGenerateConsumer_(
+    vpc: ec2.IVpc,
+    imageTag: string,
+    generateMenuQueue: sqs.IQueue,
+    generateMenuPriorityQueue: sqs.IQueue,
+    generateMenuAlternativesQueue: sqs.IQueue
+  ): lambda.DockerImageFunction {
+    const repo = ecr.Repository.fromRepositoryName(this, 'ecr-menu-generate', 'menu-generate');
+
+    const menuGenerateConsumer = new lambda.DockerImageFunction(this, 'MenuGenerate', {
+      code: lambda.DockerImageCode.fromEcr(repo, {
+        tag: imageTag
+      }),
+      environment: {
+        AWS_KEY_ID: process.env.AWS_KEY_ID || '',
+        AWS_KEY_SECRET: process.env.AWS_KEY_SECRET || '',
+        MENU_GENERATE_QUEUE_URL: generateMenuQueue.queueUrl,
+        MENU_GENERATE_PRIORITY_QUEUE_URL: generateMenuPriorityQueue.queueUrl,
+        MENU_GENERATE_ALTERNATIVES_QUEUE_URL: generateMenuAlternativesQueue.queueUrl,
+      },
+      memorySize: 2048,
+      timeout: cdk.Duration.seconds(this.sqsTimeout),
+      vpc,
+    });
+
+    // Add IAM permissions for the Lambda function to access the queue
+    //menuGenerateConsumer.addToRolePolicy(new iam.PolicyStatement({
+    //  actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage'],
+    //  resources: [generateMenuQueue.queueArn, generateMenuPriorityQueue.queueArn]
+    //}));
+
+    // Create an SQS queue event source for the Lambda function
+    const generateMenuEventSource = new SqsEventSource(generateMenuQueue);
+    menuGenerateConsumer.addEventSource(generateMenuEventSource);
+    const generateMenuPriorityEventSource = new SqsEventSource(generateMenuPriorityQueue);
+    menuGenerateConsumer.addEventSource(generateMenuPriorityEventSource);
+
+    return menuGenerateConsumer;
   }
 }
