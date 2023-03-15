@@ -70,6 +70,13 @@ export class WebServiceStack extends cdk.Stack {
       generateMenuPriorityQueue,
       generateMenuAlternativesQueue
     );
+    const menuGenerateAlternativesConsumer = this.createMenuGenerateAlternativesConsumer_(
+      props.vpc,
+      envConfig.imageTag,
+      generateMenuQueue,
+      generateMenuPriorityQueue,
+      generateMenuAlternativesQueue
+    );
 
     const rdsInstance = this.createRdsInstance_(props.vpc);
     rdsInstance.grantConnect(ecsTaskRole);
@@ -77,6 +84,7 @@ export class WebServiceStack extends cdk.Stack {
     rdsInstance.connections.allowFrom(loadBalancedFargateService.service, tcp3306, 'allow from ecs service');
     rdsInstance.connections.allowFrom(host, tcp3306, 'allow from bastion host');
     rdsInstance.connections.allowFrom(menuGenerateConsumer, tcp3306, 'allow from menu generate lambda');
+    rdsInstance.connections.allowFrom(menuGenerateAlternativesConsumer, tcp3306, 'allow from menu generate lambda');
 
     this.cluster = loadBalancedFargateService;
   }
@@ -217,9 +225,9 @@ export class WebServiceStack extends cdk.Stack {
   ): lambda.DockerImageFunction {
     const repo = ecr.Repository.fromRepositoryName(this, 'ecr-menu-generate', 'menu-generate');
 
-    const menuGenerateConsumer = new lambda.DockerImageFunction(this, 'MenuGenerate', {
+    const lambdaFunction = new lambda.DockerImageFunction(this, 'MenuGenerate', {
       code: lambda.DockerImageCode.fromEcr(repo, {
-        tag: imageTag
+        tagOrDigest: imageTag
       }),
       environment: {
         AWS_KEY_ID: process.env.AWS_KEY_ID || '',
@@ -233,18 +241,44 @@ export class WebServiceStack extends cdk.Stack {
       vpc,
     });
 
-    // Add IAM permissions for the Lambda function to access the queue
-    //menuGenerateConsumer.addToRolePolicy(new iam.PolicyStatement({
-    //  actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage'],
-    //  resources: [generateMenuQueue.queueArn, generateMenuPriorityQueue.queueArn]
-    //}));
-
     // Create an SQS queue event source for the Lambda function
     const generateMenuEventSource = new SqsEventSource(generateMenuQueue);
-    menuGenerateConsumer.addEventSource(generateMenuEventSource);
+    lambdaFunction.addEventSource(generateMenuEventSource);
     const generateMenuPriorityEventSource = new SqsEventSource(generateMenuPriorityQueue);
-    menuGenerateConsumer.addEventSource(generateMenuPriorityEventSource);
+    lambdaFunction.addEventSource(generateMenuPriorityEventSource);
 
-    return menuGenerateConsumer;
+    return lambdaFunction;
+  }
+
+  createMenuGenerateAlternativesConsumer_(
+    vpc: ec2.IVpc,
+    imageTag: string,
+    generateMenuQueue: sqs.IQueue,
+    generateMenuPriorityQueue: sqs.IQueue,
+    generateMenuAlternativesQueue: sqs.IQueue
+  ): lambda.DockerImageFunction {
+    const repo = ecr.Repository.fromRepositoryName(this, 'ecr-menu-generate-alternatives', 'menu-generate-alternatives');
+
+    const lambdaFunction = new lambda.DockerImageFunction(this, 'MenuGenerateAlternatives', {
+      code: lambda.DockerImageCode.fromEcr(repo, {
+        tagOrDigest: imageTag
+      }),
+      environment: {
+        AWS_KEY_ID: process.env.AWS_KEY_ID || '',
+        AWS_KEY_SECRET: process.env.AWS_KEY_SECRET || '',
+        MENU_GENERATE_QUEUE_URL: generateMenuQueue.queueUrl,
+        MENU_GENERATE_PRIORITY_QUEUE_URL: generateMenuPriorityQueue.queueUrl,
+        MENU_GENERATE_ALTERNATIVES_QUEUE_URL: generateMenuAlternativesQueue.queueUrl,
+      },
+      memorySize: 2048,
+      timeout: cdk.Duration.seconds(this.sqsTimeout),
+      vpc,
+    });
+
+    // Create an SQS queue event source for the Lambda function
+    const generateMenuAlternativesEventSource = new SqsEventSource(generateMenuAlternativesQueue);
+    lambdaFunction.addEventSource(generateMenuAlternativesEventSource);
+
+    return lambdaFunction;
   }
 }
