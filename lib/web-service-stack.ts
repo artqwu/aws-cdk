@@ -5,12 +5,14 @@ import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as ecs_patterns from "aws-cdk-lib/aws-ecs-patterns";
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as events_targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as route53 from 'aws-cdk-lib/aws-route53';
-import * as targets from 'aws-cdk-lib/aws-route53-targets';
+import * as r53_targets from 'aws-cdk-lib/aws-route53-targets';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import { IEnvironmentConfig } from './environment-config';
@@ -78,6 +80,14 @@ export class WebServiceStack extends cdk.Stack {
       generateMenuAlternativesQueue
     );
 
+    const menuScheduler = this.createMenuScheduler_(
+        props.vpc,
+        envConfig.imageTag,
+        generateMenuQueue,
+        generateMenuPriorityQueue,
+        generateMenuAlternativesQueue
+    );
+
     const rdsInstance = this.createRdsInstance_(props.vpc);
     rdsInstance.grantConnect(ecsTaskRole);
     const tcp3306 = ec2.Port.tcpRange(3306, 3306);
@@ -85,6 +95,7 @@ export class WebServiceStack extends cdk.Stack {
     rdsInstance.connections.allowFrom(host, tcp3306, 'allow from bastion host');
     rdsInstance.connections.allowFrom(menuGenerateConsumer, tcp3306, 'allow from menu generate lambda');
     rdsInstance.connections.allowFrom(menuGenerateAlternativesConsumer, tcp3306, 'allow from menu generate lambda');
+    rdsInstance.connections.allowFrom(menuScheduler, tcp3306, 'allow from schedule menu lambda');
 
     this.cluster = loadBalancedFargateService;
   }
@@ -212,7 +223,7 @@ export class WebServiceStack extends cdk.Stack {
     new route53.ARecord(this, 'WebServiceARecord', {
       zone: hostedZone,
       recordName: domain,
-      target: route53.RecordTarget.fromAlias(new targets.LoadBalancerTarget(loadBalancer))
+      target: route53.RecordTarget.fromAlias(new r53_targets.LoadBalancerTarget(loadBalancer))
     });
   }
 
@@ -278,6 +289,41 @@ export class WebServiceStack extends cdk.Stack {
     // Create an SQS queue event source for the Lambda function
     const generateMenuAlternativesEventSource = new SqsEventSource(generateMenuAlternativesQueue);
     lambdaFunction.addEventSource(generateMenuAlternativesEventSource);
+
+    return lambdaFunction;
+  }
+
+  createMenuScheduler_(
+    vpc: ec2.IVpc,
+    imageTag: string,
+    generateMenuQueue: sqs.IQueue,
+    generateMenuPriorityQueue: sqs.IQueue,
+    generateMenuAlternativesQueue: sqs.IQueue
+  ): lambda.DockerImageFunction {
+    const rateMin = 20;  // Run every 20 minutes
+
+    const repo = ecr.Repository.fromRepositoryName(this, 'ecr-schedule-menu', 'schedule-menu');
+
+    const lambdaFunction = new lambda.DockerImageFunction(this, 'ScheduleMenu', {
+      code: lambda.DockerImageCode.fromEcr(repo, {
+        tagOrDigest: imageTag
+      }),
+      environment: {
+        AWS_KEY_ID: process.env.AWS_KEY_ID || '',
+        AWS_KEY_SECRET: process.env.AWS_KEY_SECRET || '',
+        MENU_GENERATE_QUEUE_URL: generateMenuQueue.queueUrl,
+        MENU_GENERATE_PRIORITY_QUEUE_URL: generateMenuPriorityQueue.queueUrl,
+        MENU_GENERATE_ALTERNATIVES_QUEUE_URL: generateMenuAlternativesQueue.queueUrl,
+      },
+      memorySize: 128,
+      timeout: cdk.Duration.seconds(this.sqsTimeout),
+      vpc,
+    });
+
+    new events.Rule(this, 'ScheduleMenuRule', {
+      schedule: events.Schedule.rate(cdk.Duration.minutes(rateMin)),
+      targets: [new events_targets.LambdaFunction(lambdaFunction)],
+     });
 
     return lambdaFunction;
   }
