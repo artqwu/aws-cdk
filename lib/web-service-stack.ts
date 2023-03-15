@@ -55,7 +55,7 @@ export class WebServiceStack extends cdk.Stack {
       generateMenuAlternativesQueue.queueUrl
     );
 
-    // create a bastion host
+    // create a bastion host accessible via EC2 Instance Connect
     const host = new ec2.BastionHostLinux(this, 'BastionHost', {
       vpc: props.vpc,
       subnetSelection: { subnetType: ec2.SubnetType.PUBLIC },
@@ -81,11 +81,19 @@ export class WebServiceStack extends cdk.Stack {
     );
 
     const menuScheduler = this.createMenuScheduler_(
-        props.vpc,
-        envConfig.imageTag,
-        generateMenuQueue,
-        generateMenuPriorityQueue,
-        generateMenuAlternativesQueue
+      props.vpc,
+      envConfig.imageTag,
+      generateMenuQueue,
+      generateMenuPriorityQueue,
+      generateMenuAlternativesQueue
+    );
+
+    const scheduleExecutor = this.createScheduleExecutor_(
+      props.vpc,
+      envConfig.imageTag,
+      generateMenuQueue,
+      generateMenuPriorityQueue,
+      generateMenuAlternativesQueue
     );
 
     const rdsInstance = this.createRdsInstance_(props.vpc);
@@ -93,9 +101,10 @@ export class WebServiceStack extends cdk.Stack {
     const tcp3306 = ec2.Port.tcpRange(3306, 3306);
     rdsInstance.connections.allowFrom(loadBalancedFargateService.service, tcp3306, 'allow from ecs service');
     rdsInstance.connections.allowFrom(host, tcp3306, 'allow from bastion host');
-    rdsInstance.connections.allowFrom(menuGenerateConsumer, tcp3306, 'allow from menu generate lambda');
-    rdsInstance.connections.allowFrom(menuGenerateAlternativesConsumer, tcp3306, 'allow from menu generate lambda');
-    rdsInstance.connections.allowFrom(menuScheduler, tcp3306, 'allow from schedule menu lambda');
+    rdsInstance.connections.allowFrom(menuGenerateConsumer, tcp3306, 'allow from menu-generate lambda');
+    rdsInstance.connections.allowFrom(menuGenerateAlternativesConsumer, tcp3306, 'allow from menu-generate-alternatives lambda');
+    rdsInstance.connections.allowFrom(menuScheduler, tcp3306, 'allow from schedule-menu lambda');
+    rdsInstance.connections.allowFrom(scheduleExecutor, tcp3306, 'allow from execute-schedule lambda');
 
     this.cluster = loadBalancedFargateService;
   }
@@ -315,7 +324,7 @@ export class WebServiceStack extends cdk.Stack {
         MENU_GENERATE_PRIORITY_QUEUE_URL: generateMenuPriorityQueue.queueUrl,
         MENU_GENERATE_ALTERNATIVES_QUEUE_URL: generateMenuAlternativesQueue.queueUrl,
       },
-      memorySize: 128,
+      memorySize: 512,
       timeout: cdk.Duration.seconds(this.sqsTimeout),
       vpc,
     });
@@ -323,7 +332,42 @@ export class WebServiceStack extends cdk.Stack {
     new events.Rule(this, 'ScheduleMenuRule', {
       schedule: events.Schedule.rate(cdk.Duration.minutes(rateMin)),
       targets: [new events_targets.LambdaFunction(lambdaFunction)],
-     });
+    });
+
+    return lambdaFunction;
+  }
+
+  createScheduleExecutor_(
+    vpc: ec2.IVpc,
+    imageTag: string,
+    generateMenuQueue: sqs.IQueue,
+    generateMenuPriorityQueue: sqs.IQueue,
+    generateMenuAlternativesQueue: sqs.IQueue
+  ): lambda.DockerImageFunction {
+    const rateMin = 10;  // Run every 20 minutes
+
+    const repo = ecr.Repository.fromRepositoryName(this, 'ecr-execute-schedule', 'execute-schedule');
+
+    const lambdaFunction = new lambda.DockerImageFunction(this, 'ExecuteSchedule', {
+      code: lambda.DockerImageCode.fromEcr(repo, {
+        tagOrDigest: imageTag
+      }),
+      environment: {
+        AWS_KEY_ID: process.env.AWS_KEY_ID || '',
+        AWS_KEY_SECRET: process.env.AWS_KEY_SECRET || '',
+        MENU_GENERATE_QUEUE_URL: generateMenuQueue.queueUrl,
+        MENU_GENERATE_PRIORITY_QUEUE_URL: generateMenuPriorityQueue.queueUrl,
+        MENU_GENERATE_ALTERNATIVES_QUEUE_URL: generateMenuAlternativesQueue.queueUrl,
+      },
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(this.sqsTimeout),
+      vpc,
+    });
+
+    new events.Rule(this, 'ExecuteScheduleRule', {
+      schedule: events.Schedule.rate(cdk.Duration.minutes(rateMin)),
+      targets: [new events_targets.LambdaFunction(lambdaFunction)],
+    });
 
     return lambdaFunction;
   }
