@@ -5,7 +5,7 @@
     "us-east-2c"
   ],
   "962199888341": {
-    "imageTag": "0.0.87",
+    "imageTag": "latest",
     "domain": "db.aws-dev.thedinnerdaily.com",
     "hostedZoneId": "Z010453623RVJF2NPOIVD",
     "certArn": "arn:aws:acm:us-east-2:962199888341:certificate/d5f3d620-8561-485b-9478-c0bc787b1b43"
