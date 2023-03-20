@@ -23,3 +23,20 @@ The `cdk.json` file tells the CDK Toolkit how to execute your app.
 ## Platform
 
 - VpcWithALBAndECS: VPC, ALB, ECS Fargate cluster
+
+
+# Build and deploy platform
+## 1. build/tag/push all images to AWS OU with version tag
+### Windows command prompt
+
+`SYMFONY_PROJECT_DIR> ./scripts/aws/deploy.bat {AWS profile} {tag}`
+
+### Ex:
+
+`[dd_backend_symfony]> ./scripts/aws/deploy.bat devuser 0.0.88`
+
+## 2. deploy stacks to AWS OU (Linux/bash)
+
+`[aws_cdk]$ AWS_KEY_ID={symfony_iam_key_id} \`
+`AWS_KEY_SECRET={symfony_iam_key_isecret} \`
+`cdk deploy [--all | WebServiceStack] --profile devuser`
