@@ -163,7 +163,7 @@ export class WebServiceStack extends cdk.Stack {
   ): ecs_patterns.ApplicationLoadBalancedFargateService {
     const cpu = 4096; // Default is 256
     const memoryLimitMiB = 16384;
-    const taskCount = 2;
+    const taskCount = 1;
 
     const cluster = new ecs.Cluster(this, "WebServiceCluster", {
       vpc
