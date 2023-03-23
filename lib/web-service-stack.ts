@@ -4,6 +4,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as ecs_patterns from "aws-cdk-lib/aws-ecs-patterns";
+import * as efs from 'aws-cdk-lib/aws-efs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as events_targets from 'aws-cdk-lib/aws-events-targets';
@@ -164,6 +165,9 @@ export class WebServiceStack extends cdk.Stack {
     const cpu = 4096; // Default is 256
     const memoryLimitMiB = 16384;
     const taskCount = 1;
+    const relativeEfsPath = 'web/uploads/media';
+    const absoluteEfsPath = `/var/www/html/${relativeEfsPath}`;
+    const efsVolumeName = 'efs-server-AP';
 
     const cluster = new ecs.Cluster(this, "WebServiceCluster", {
       vpc
@@ -173,17 +177,64 @@ export class WebServiceStack extends cdk.Stack {
     const image = ecs.ContainerImage.fromEcrRepository(repo, envConfig.imageTag);
     const certificate = acm.Certificate.fromCertificateArn(this, 'Certificate', envConfig.certArn);
 
+    // Create an EFS file system
+    const fileSystem = new efs.FileSystem(this, 'WebFileSystem', {
+      fileSystemName: 'WebFileSystem',
+      vpc,
+      encrypted: true
+    });
+
+    // Create an EFS access point
+    const accessPoint = fileSystem.addAccessPoint('WebAccessPoint', {
+      createAcl: {
+        ownerUid: '1000',
+        ownerGid: '1000',
+        permissions: '755',
+      },
+      posixUser: {
+        uid: '1000',
+        gid: '1000',
+      }
+    });
+
+    // Attach an EFS policy to the task role
+    taskRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        // 'elasticfilesystem:ClientRootAccess',
+        'elasticfilesystem:ClientMount',
+        'elasticfilesystem:ClientWrite',
+        'elasticfilesystem:DescribeMountTargets'
+      ],
+      resources: [
+        fileSystem.fileSystemArn,
+      ],
+    }));
+
     const taskDefinition = new ecs.FargateTaskDefinition(this, 'WebServiceTaskDefinition', {
       taskRole,
       cpu,
       memoryLimitMiB,
     });
 
+    // add task definition to mount EFS
+    taskDefinition.addVolume({
+      name: efsVolumeName,
+      efsVolumeConfiguration: {
+        fileSystemId: fileSystem.fileSystemId,
+        transitEncryption: 'ENABLED',
+        authorizationConfig: {
+          iam: 'ENABLED',
+          accessPointId: accessPoint.accessPointId,
+        }
+      },
+    });
+
     const logDriver = ecs.LogDriver.awsLogs({
       streamPrefix: 'web-service'
     });
 
-    taskDefinition.addContainer('WebContainer', {
+    const containerDefinition = taskDefinition.addContainer('WebContainer', {
       cpu,
       image,
       memoryLimitMiB,
@@ -191,12 +242,23 @@ export class WebServiceStack extends cdk.Stack {
       environment: {
         AWS_KEY_ID: process.env.AWS_KEY_ID || '',
         AWS_KEY_SECRET: process.env.AWS_KEY_SECRET || '',
+        EFS_ACCESS_POINT_ID: accessPoint.accessPointId,
+        EFS_MOUNT_POINT: relativeEfsPath,
+        EFS_ID: fileSystem.fileSystemId,
         MENU_GENERATE_QUEUE_URL: generateMenuQueueUrl,
         MENU_GENERATE_PRIORITY_QUEUE_URL: generateMenuPriorityQueueUrl,
         MENU_GENERATE_ALTERNATIVES_QUEUE_URL: generateMenuAlternativesQueueUrl,
       },
       logging: logDriver
     });
+
+    // Add a mount point to the container definition
+    const mountPoint: ecs.MountPoint = {
+      containerPath: absoluteEfsPath,
+      readOnly: false,
+      sourceVolume: efsVolumeName,
+    };
+    containerDefinition.addMountPoints(mountPoint);
 
     // Create a load-balanced Fargate service and make it public
     const loadBalancedFargateService = new ecs_patterns.ApplicationLoadBalancedFargateService(this, "WebService", {
@@ -208,6 +270,8 @@ export class WebServiceStack extends cdk.Stack {
       protocol: elbv2.ApplicationProtocol.HTTPS,
       targetProtocol: elbv2.ApplicationProtocol.HTTPS
     });
+
+    fileSystem.connections.allowDefaultPortFrom(loadBalancedFargateService.service.connections);
 
     loadBalancedFargateService.targetGroup.configureHealthCheck({
       path: "/app",
