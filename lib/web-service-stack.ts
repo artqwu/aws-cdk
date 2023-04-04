@@ -121,6 +121,7 @@ export class WebServiceStack extends cdk.Stack {
     // taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy'));
     taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonRDSDataFullAccess'));
     taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSQSFullAccess'));
+    //taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonElasticFileSystemClientReadWriteAccess'));
     taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('SecretsManagerReadWrite'));
     taskRole.addToPolicy(new iam.PolicyStatement({
       resources: ['*'],
@@ -185,11 +186,12 @@ export class WebServiceStack extends cdk.Stack {
     });
 
     // Create an EFS access point
-    const accessPoint = fileSystem.addAccessPoint('WebAccessPoint', {
+    const ecsAccessPoint = fileSystem.addAccessPoint('WebAccessPoint', {
+      path: '/ecs',
       createAcl: {
         ownerUid: '1000',
         ownerGid: '1000',
-        permissions: '755',
+        permissions: '777',
       },
       posixUser: {
         uid: '1000',
@@ -201,7 +203,7 @@ export class WebServiceStack extends cdk.Stack {
     taskRole.addToPolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
-        // 'elasticfilesystem:ClientRootAccess',
+        'elasticfilesystem:ClientRootAccess',
         'elasticfilesystem:ClientMount',
         'elasticfilesystem:ClientWrite',
         'elasticfilesystem:DescribeMountTargets'
@@ -225,7 +227,7 @@ export class WebServiceStack extends cdk.Stack {
         transitEncryption: 'ENABLED',
         authorizationConfig: {
           iam: 'ENABLED',
-          accessPointId: accessPoint.accessPointId,
+          accessPointId: ecsAccessPoint.accessPointId,
         }
       },
     });
@@ -242,7 +244,7 @@ export class WebServiceStack extends cdk.Stack {
       environment: {
         AWS_KEY_ID: process.env.AWS_KEY_ID || '',
         AWS_KEY_SECRET: process.env.AWS_KEY_SECRET || '',
-        EFS_ACCESS_POINT_ID: accessPoint.accessPointId,
+        EFS_ACCESS_POINT_ID: ecsAccessPoint.accessPointId,
         EFS_MOUNT_POINT: relativeEfsPath,
         EFS_ID: fileSystem.fileSystemId,
         MENU_GENERATE_QUEUE_URL: generateMenuQueueUrl,
