@@ -46,11 +46,15 @@ export class WebServiceStack extends cdk.Stack {
     });
 
     const ecsTaskRole = this.createEcsTaskRole_();
+    const fileSystem = this.createEfs_(props.vpc);
+    const efsAccessPoint = this.createEfsAccessPoint_(fileSystem);
 
     const loadBalancedFargateService = this.createLoadBalancedFargateService_(
       props.vpc,
       ecsTaskRole,
       envConfig,
+      fileSystem,
+      efsAccessPoint,
       generateMenuQueue.queueUrl,
       generateMenuPriorityQueue.queueUrl,
       generateMenuAlternativesQueue.queueUrl
@@ -63,6 +67,7 @@ export class WebServiceStack extends cdk.Stack {
     });
     // host.allowSshAccessFrom(ec2.Peer.ipv4('24.147.56.174/32'));
     host.allowSshAccessFrom(ec2.Peer.ipv4('0.0.0.0/0'));
+    host.role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonElasticFileSystemClientReadWriteAccess'));
 
     this.createARecord_(envConfig.hostedZoneId, envConfig.domain, loadBalancedFargateService.loadBalancer);
 
@@ -108,6 +113,35 @@ export class WebServiceStack extends cdk.Stack {
     rdsInstance.connections.allowFrom(scheduleExecutor, tcp3306, 'allow from execute-schedule lambda');
 
     this.cluster = loadBalancedFargateService;
+  }
+
+  createEfs_(vpc: ec2.IVpc): efs.FileSystem {
+    // Create an EFS file system
+    const fileSystem = new efs.FileSystem(this, 'WebFileSystem', {
+      fileSystemName: 'WebFileSystem',
+      vpc,
+      encrypted: true
+    });
+
+    return fileSystem;
+  }
+
+  createEfsAccessPoint_(fileSystem: efs.FileSystem): efs.AccessPoint {
+    // Create an EFS access point
+    const efsAccessPoint = fileSystem.addAccessPoint('WebAccessPoint', {
+      path: '/ecs',
+      createAcl: {
+        ownerUid: '1000',
+        ownerGid: '1000',
+        permissions: '777',
+      },
+      posixUser: {
+        uid: '1000',
+        gid: '1000',
+      }
+    });
+
+    return efsAccessPoint;
   }
 
   /**
@@ -159,6 +193,8 @@ export class WebServiceStack extends cdk.Stack {
     vpc: ec2.IVpc,
     taskRole: iam.Role,
     envConfig: IEnvironmentConfig,
+    fileSystem: efs.FileSystem,
+    efsAccessPoint: efs.AccessPoint,
     generateMenuQueueUrl: string,
     generateMenuPriorityQueueUrl: string,
     generateMenuAlternativesQueueUrl: string
@@ -178,32 +214,11 @@ export class WebServiceStack extends cdk.Stack {
     const image = ecs.ContainerImage.fromEcrRepository(repo, envConfig.imageTag);
     const certificate = acm.Certificate.fromCertificateArn(this, 'Certificate', envConfig.certArn);
 
-    // Create an EFS file system
-    const fileSystem = new efs.FileSystem(this, 'WebFileSystem', {
-      fileSystemName: 'WebFileSystem',
-      vpc,
-      encrypted: true
-    });
-
-    // Create an EFS access point
-    const ecsAccessPoint = fileSystem.addAccessPoint('WebAccessPoint', {
-      path: '/ecs',
-      createAcl: {
-        ownerUid: '1000',
-        ownerGid: '1000',
-        permissions: '777',
-      },
-      posixUser: {
-        uid: '1000',
-        gid: '1000',
-      }
-    });
-
     // Attach an EFS policy to the task role
     taskRole.addToPolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
-        'elasticfilesystem:ClientRootAccess',
+        // 'elasticfilesystem:ClientRootAccess',
         'elasticfilesystem:ClientMount',
         'elasticfilesystem:ClientWrite',
         'elasticfilesystem:DescribeMountTargets'
@@ -227,7 +242,7 @@ export class WebServiceStack extends cdk.Stack {
         transitEncryption: 'ENABLED',
         authorizationConfig: {
           iam: 'ENABLED',
-          accessPointId: ecsAccessPoint.accessPointId,
+          accessPointId: efsAccessPoint.accessPointId,
         }
       },
     });
@@ -244,7 +259,7 @@ export class WebServiceStack extends cdk.Stack {
       environment: {
         AWS_KEY_ID: process.env.AWS_KEY_ID || '',
         AWS_KEY_SECRET: process.env.AWS_KEY_SECRET || '',
-        EFS_ACCESS_POINT_ID: ecsAccessPoint.accessPointId,
+        EFS_ACCESS_POINT_ID: efsAccessPoint.accessPointId,
         EFS_MOUNT_POINT: relativeEfsPath,
         EFS_ID: fileSystem.fileSystemId,
         MENU_GENERATE_QUEUE_URL: generateMenuQueueUrl,
