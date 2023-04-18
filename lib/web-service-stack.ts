@@ -202,6 +202,7 @@ export class WebServiceStack extends cdk.Stack {
     const cpu = 4096; // Default is 256
     const memoryLimitMiB = 16384;
     const taskCount = 1;
+    const maxTaskCount = 2;
     const relativeEfsPath = 'web/uploads/media';
     const absoluteEfsPath = `/var/www/html/${relativeEfsPath}`;
     const efsVolumeName = 'efs-server-AP';
@@ -286,6 +287,14 @@ export class WebServiceStack extends cdk.Stack {
       certificate,
       protocol: elbv2.ApplicationProtocol.HTTPS,
       targetProtocol: elbv2.ApplicationProtocol.HTTPS
+    });
+
+    // Setup AutoScaling policy
+    const scaling = loadBalancedFargateService.service.autoScaleTaskCount({ maxCapacity: maxTaskCount });
+    scaling.scaleOnCpuUtilization('CpuScaling', {
+      targetUtilizationPercent: 50,
+      scaleInCooldown: cdk.Duration.seconds(60),
+      scaleOutCooldown: cdk.Duration.seconds(60)
     });
 
     fileSystem.connections.allowDefaultPortFrom(loadBalancedFargateService.service.connections);
