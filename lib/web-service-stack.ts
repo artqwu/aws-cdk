@@ -24,6 +24,8 @@ export interface WebServiceStackProps extends cdk.StackProps {
 }
 export class WebServiceStack extends cdk.Stack {
   public readonly cluster: ecs_patterns.ApplicationLoadBalancedFargateService;
+  public readonly identity: iam.IGrantable;
+
   private sqsTimeout: number = 300;
 
   constructor(scope: Construct, id: string, props: WebServiceStackProps) {
@@ -113,6 +115,7 @@ export class WebServiceStack extends cdk.Stack {
     rdsInstance.connections.allowFrom(scheduleExecutor, tcp3306, 'allow from execute-schedule lambda');
 
     this.cluster = loadBalancedFargateService;
+    this.identity = ecsTaskRole.grantPrincipal;
   }
 
   createEfs_(vpc: ec2.IVpc): efs.FileSystem {
