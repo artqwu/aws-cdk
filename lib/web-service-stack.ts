@@ -50,7 +50,7 @@ export class WebServiceStack extends cdk.Stack {
 
     const defaultSecurityGroup = ec2.SecurityGroup.fromSecurityGroupId(this, 'DefaultSecurityGroup', props.vpc.vpcDefaultSecurityGroup);
     const ecsTaskRole = this.createEcsTaskRole_();
-    // const openSearchDomain = this.createOpenSearchDomain_(props.vpc, ecsTaskRole);
+    const openSearchDomain = this.createOpenSearchDomain_(props.vpc, defaultSecurityGroup, ecsTaskRole);
     const fileSystem = this.createEfs_(props.vpc);
     const efsAccessPoint = this.createEfsAccessPoint_(fileSystem);
 
@@ -64,19 +64,8 @@ export class WebServiceStack extends cdk.Stack {
       generateMenuQueue.queueUrl,
       generateMenuPriorityQueue.queueUrl,
       generateMenuAlternativesQueue.queueUrl,
-      'domain-endpoint'// openSearchDomain.domainEndpoint
+      openSearchDomain.domainEndpoint
     );
-
-    // create a bastion host accessible via EC2 Instance Connect
-    /*
-    const host = new ec2.BastionHostLinux(this, 'BastionHost', {
-      vpc: props.vpc,
-      subnetSelection: { subnetType: ec2.SubnetType.PUBLIC },
-    });
-    */
-    // host.allowSshAccessFrom(ec2.Peer.ipv4('24.147.56.174/32'));
-    // host.allowSshAccessFrom(ec2.Peer.ipv4('0.0.0.0/0'));
-    // host.role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonElasticFileSystemClientReadWriteAccess'));
 
     this.createARecord_(envConfig.hostedZoneId, envConfig.domain, loadBalancedFargateService.loadBalancer);
 
@@ -159,7 +148,6 @@ export class WebServiceStack extends cdk.Stack {
     taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonOpenSearchServiceFullAccess'));
     taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonRDSDataFullAccess'));
     taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSQSFullAccess'));
-    // taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonElasticFileSystemClientReadWriteAccess'));
     taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('SecretsManagerReadWrite'));
     taskRole.addToPolicy(new iam.PolicyStatement({
       resources: ['*'],
@@ -175,12 +163,17 @@ export class WebServiceStack extends cdk.Stack {
     return taskRole;
   }
 
-  createOpenSearchDomain_(vpc: ec2.IVpc, identity: iam.IGrantable): os.Domain {
+  createOpenSearchDomain_(
+    vpc: ec2.IVpc,
+    vpcSecurityGroup: ec2.ISecurityGroup,
+    identity: iam.IGrantable
+  ): os.Domain {
     const domainProps: os.DomainProps = {
       version: os.EngineVersion.OPENSEARCH_2_3,
       useUnsignedBasicAuth: true,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       vpc,
+      securityGroups: [vpcSecurityGroup],
       capacity: {
         dataNodes: 2,
       },
