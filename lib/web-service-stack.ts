@@ -11,6 +11,7 @@ import * as events_targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
+import * as os from 'aws-cdk-lib/aws-opensearchservice';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as r53_targets from 'aws-cdk-lib/aws-route53-targets';
@@ -47,34 +48,41 @@ export class WebServiceStack extends cdk.Stack {
       visibilityTimeout: cdk.Duration.seconds(this.sqsTimeout)
     });
 
+    const defaultSecurityGroup = ec2.SecurityGroup.fromSecurityGroupId(this, 'DefaultSecurityGroup', props.vpc.vpcDefaultSecurityGroup);
     const ecsTaskRole = this.createEcsTaskRole_();
+    // const openSearchDomain = this.createOpenSearchDomain_(props.vpc, ecsTaskRole);
     const fileSystem = this.createEfs_(props.vpc);
     const efsAccessPoint = this.createEfsAccessPoint_(fileSystem);
 
     const loadBalancedFargateService = this.createLoadBalancedFargateService_(
       props.vpc,
+      defaultSecurityGroup,
       ecsTaskRole,
       envConfig,
       fileSystem,
       efsAccessPoint,
       generateMenuQueue.queueUrl,
       generateMenuPriorityQueue.queueUrl,
-      generateMenuAlternativesQueue.queueUrl
+      generateMenuAlternativesQueue.queueUrl,
+      'domain-endpoint'// openSearchDomain.domainEndpoint
     );
 
     // create a bastion host accessible via EC2 Instance Connect
+    /*
     const host = new ec2.BastionHostLinux(this, 'BastionHost', {
       vpc: props.vpc,
       subnetSelection: { subnetType: ec2.SubnetType.PUBLIC },
     });
+    */
     // host.allowSshAccessFrom(ec2.Peer.ipv4('24.147.56.174/32'));
-    host.allowSshAccessFrom(ec2.Peer.ipv4('0.0.0.0/0'));
-    host.role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonElasticFileSystemClientReadWriteAccess'));
+    // host.allowSshAccessFrom(ec2.Peer.ipv4('0.0.0.0/0'));
+    // host.role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonElasticFileSystemClientReadWriteAccess'));
 
     this.createARecord_(envConfig.hostedZoneId, envConfig.domain, loadBalancedFargateService.loadBalancer);
 
     const menuGenerateConsumer = this.createMenuGenerateConsumer_(
       props.vpc,
+      defaultSecurityGroup,
       envConfig.imageTag,
       generateMenuQueue,
       generateMenuPriorityQueue,
@@ -82,6 +90,7 @@ export class WebServiceStack extends cdk.Stack {
     );
     const menuGenerateAlternativesConsumer = this.createMenuGenerateAlternativesConsumer_(
       props.vpc,
+      defaultSecurityGroup,
       envConfig.imageTag,
       generateMenuQueue,
       generateMenuPriorityQueue,
@@ -90,6 +99,7 @@ export class WebServiceStack extends cdk.Stack {
 
     const menuScheduler = this.createMenuScheduler_(
       props.vpc,
+      defaultSecurityGroup,
       envConfig.imageTag,
       generateMenuQueue,
       generateMenuPriorityQueue,
@@ -98,21 +108,12 @@ export class WebServiceStack extends cdk.Stack {
 
     const scheduleExecutor = this.createScheduleExecutor_(
       props.vpc,
+      defaultSecurityGroup,
       envConfig.imageTag,
       generateMenuQueue,
       generateMenuPriorityQueue,
       generateMenuAlternativesQueue
     );
-
-    const rdsInstance = this.createRdsInstance_(props.vpc);
-    rdsInstance.grantConnect(ecsTaskRole);
-    const tcp3306 = ec2.Port.tcpRange(3306, 3306);
-    rdsInstance.connections.allowFrom(loadBalancedFargateService.service, tcp3306, 'allow from ecs service');
-    rdsInstance.connections.allowFrom(host, tcp3306, 'allow from bastion host');
-    rdsInstance.connections.allowFrom(menuGenerateConsumer, tcp3306, 'allow from menu-generate lambda');
-    rdsInstance.connections.allowFrom(menuGenerateAlternativesConsumer, tcp3306, 'allow from menu-generate-alternatives lambda');
-    rdsInstance.connections.allowFrom(menuScheduler, tcp3306, 'allow from schedule-menu lambda');
-    rdsInstance.connections.allowFrom(scheduleExecutor, tcp3306, 'allow from execute-schedule lambda');
 
     this.cluster = loadBalancedFargateService;
     this.identity = ecsTaskRole.grantPrincipal;
@@ -155,10 +156,10 @@ export class WebServiceStack extends cdk.Stack {
     const taskRole = new iam.Role(this, 'EcsTaskRole', {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
     });
-    // taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy'));
+    taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonOpenSearchServiceFullAccess'));
     taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonRDSDataFullAccess'));
     taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSQSFullAccess'));
-    //taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonElasticFileSystemClientReadWriteAccess'));
+    // taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonElasticFileSystemClientReadWriteAccess'));
     taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('SecretsManagerReadWrite'));
     taskRole.addToPolicy(new iam.PolicyStatement({
       resources: ['*'],
@@ -174,33 +175,46 @@ export class WebServiceStack extends cdk.Stack {
     return taskRole;
   }
 
-  createRdsInstance_(vpc: ec2.IVpc): rds.DatabaseInstance {
-    return new rds.DatabaseInstance(this, 'SymfonyDb', {
-      engine: rds.DatabaseInstanceEngine.mysql({
-        version: rds.MysqlEngineVersion.VER_5_7_38,
-      }),
-      backupRetention: cdk.Duration.days(7),
-      allocatedStorage: 20,
-      // optional, defaults to m5.large
-      // instanceType: ec2.InstanceType.of(ec2.InstanceClass.BURSTABLE3, ec2.InstanceSize.SMALL),
-      credentials: rds.Credentials.fromGeneratedSecret('admin'), // Optional - will default to 'admin' username and generated password
-      vpc,
+  createOpenSearchDomain_(vpc: ec2.IVpc, identity: iam.IGrantable): os.Domain {
+    const domainProps: os.DomainProps = {
+      version: os.EngineVersion.OPENSEARCH_2_3,
+      useUnsignedBasicAuth: true,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
-      storageEncrypted: true,
-      monitoringInterval: cdk.Duration.seconds(60),
-      publiclyAccessible: false,
-    });
+      vpc,
+      capacity: {
+        dataNodes: 2,
+      },
+      ebs: {
+        volumeSize: 10,
+      },
+      zoneAwareness: {
+        enabled: true
+      },
+      logging: {
+        slowSearchLogEnabled: true,
+        appLogEnabled: true,
+        slowIndexLogEnabled: true,
+      },
+    };
+
+    const domain = new os.Domain(this, 'recipes', domainProps);
+    domain.grantRead(identity);
+    domain.grantWrite(identity);
+
+    return domain;
   }
 
   createLoadBalancedFargateService_(
     vpc: ec2.IVpc,
+    vpcSecurityGroup: ec2.ISecurityGroup,
     taskRole: iam.Role,
     envConfig: IEnvironmentConfig,
     fileSystem: efs.FileSystem,
     efsAccessPoint: efs.AccessPoint,
     generateMenuQueueUrl: string,
     generateMenuPriorityQueueUrl: string,
-    generateMenuAlternativesQueueUrl: string
+    generateMenuAlternativesQueueUrl: string,
+    openSearchEndpoint: string
   ): ecs_patterns.ApplicationLoadBalancedFargateService {
     const cpu = 4096; // Default is 256
     const memoryLimitMiB = 16384;
@@ -222,7 +236,6 @@ export class WebServiceStack extends cdk.Stack {
     taskRole.addToPolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
-        // 'elasticfilesystem:ClientRootAccess',
         'elasticfilesystem:ClientMount',
         'elasticfilesystem:ClientWrite',
         'elasticfilesystem:DescribeMountTargets'
@@ -269,6 +282,7 @@ export class WebServiceStack extends cdk.Stack {
         MENU_GENERATE_QUEUE_URL: generateMenuQueueUrl,
         MENU_GENERATE_PRIORITY_QUEUE_URL: generateMenuPriorityQueueUrl,
         MENU_GENERATE_ALTERNATIVES_QUEUE_URL: generateMenuAlternativesQueueUrl,
+        OPEN_SEARCH_ENDPOINT: openSearchEndpoint
       },
       logging: logDriver
     });
@@ -289,7 +303,8 @@ export class WebServiceStack extends cdk.Stack {
       publicLoadBalancer: true, // Default is true
       certificate,
       protocol: elbv2.ApplicationProtocol.HTTPS,
-      targetProtocol: elbv2.ApplicationProtocol.HTTPS
+      targetProtocol: elbv2.ApplicationProtocol.HTTPS,
+      securityGroups: [vpcSecurityGroup]
     });
 
     // Setup AutoScaling policy
@@ -329,8 +344,24 @@ export class WebServiceStack extends cdk.Stack {
     });
   }
 
+  addCommonLambdaPolicies_(lambdaFunction: lambda.Function): void {
+    if (lambdaFunction.role) {
+      lambdaFunction.role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('SecretsManagerReadWrite'));
+      lambdaFunction.role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonRDSDataFullAccess'));
+    }
+  }
+
+  addSqsLambdaPolicies_(lambdaFunction: lambda.Function): void {
+    this.addCommonLambdaPolicies_(lambdaFunction);
+    if (lambdaFunction.role) {
+      lambdaFunction.role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonDynamoDBFullAccess'));
+      lambdaFunction.role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaSQSQueueExecutionRole'));
+    }
+  }
+
   createMenuGenerateConsumer_(
     vpc: ec2.IVpc,
+    vpcSecurityGroup: ec2.ISecurityGroup,
     imageTag: string,
     generateMenuQueue: sqs.IQueue,
     generateMenuPriorityQueue: sqs.IQueue,
@@ -348,11 +379,15 @@ export class WebServiceStack extends cdk.Stack {
         MENU_GENERATE_QUEUE_URL: generateMenuQueue.queueUrl,
         MENU_GENERATE_PRIORITY_QUEUE_URL: generateMenuPriorityQueue.queueUrl,
         MENU_GENERATE_ALTERNATIVES_QUEUE_URL: generateMenuAlternativesQueue.queueUrl,
+        OPEN_SEARCH_ENDPOINT: 'openSearchEndpoint'
       },
       memorySize: 2048,
       timeout: cdk.Duration.seconds(this.sqsTimeout),
       vpc,
+      securityGroups: [vpcSecurityGroup]
     });
+
+    this.addSqsLambdaPolicies_(lambdaFunction);
 
     // Create an SQS queue event source for the Lambda function
     const generateMenuEventSource = new SqsEventSource(generateMenuQueue);
@@ -365,6 +400,7 @@ export class WebServiceStack extends cdk.Stack {
 
   createMenuGenerateAlternativesConsumer_(
     vpc: ec2.IVpc,
+    vpcSecurityGroup: ec2.ISecurityGroup,
     imageTag: string,
     generateMenuQueue: sqs.IQueue,
     generateMenuPriorityQueue: sqs.IQueue,
@@ -382,11 +418,15 @@ export class WebServiceStack extends cdk.Stack {
         MENU_GENERATE_QUEUE_URL: generateMenuQueue.queueUrl,
         MENU_GENERATE_PRIORITY_QUEUE_URL: generateMenuPriorityQueue.queueUrl,
         MENU_GENERATE_ALTERNATIVES_QUEUE_URL: generateMenuAlternativesQueue.queueUrl,
+        OPEN_SEARCH_ENDPOINT: 'openSearchEndpoint'
       },
       memorySize: 2048,
       timeout: cdk.Duration.seconds(this.sqsTimeout),
       vpc,
+      securityGroups: [vpcSecurityGroup]
     });
+
+    this.addSqsLambdaPolicies_(lambdaFunction);
 
     // Create an SQS queue event source for the Lambda function
     const generateMenuAlternativesEventSource = new SqsEventSource(generateMenuAlternativesQueue);
@@ -397,6 +437,7 @@ export class WebServiceStack extends cdk.Stack {
 
   createMenuScheduler_(
     vpc: ec2.IVpc,
+    vpcSecurityGroup: ec2.ISecurityGroup,
     imageTag: string,
     generateMenuQueue: sqs.IQueue,
     generateMenuPriorityQueue: sqs.IQueue,
@@ -416,11 +457,15 @@ export class WebServiceStack extends cdk.Stack {
         MENU_GENERATE_QUEUE_URL: generateMenuQueue.queueUrl,
         MENU_GENERATE_PRIORITY_QUEUE_URL: generateMenuPriorityQueue.queueUrl,
         MENU_GENERATE_ALTERNATIVES_QUEUE_URL: generateMenuAlternativesQueue.queueUrl,
+        OPEN_SEARCH_ENDPOINT: 'openSearchEndpoint'
       },
       memorySize: 512,
       timeout: cdk.Duration.seconds(this.sqsTimeout),
       vpc,
+      securityGroups: [vpcSecurityGroup]
     });
+
+    this.addCommonLambdaPolicies_(lambdaFunction);
 
     new events.Rule(this, 'ScheduleMenuRule', {
       schedule: events.Schedule.rate(cdk.Duration.minutes(rateMin)),
@@ -432,6 +477,7 @@ export class WebServiceStack extends cdk.Stack {
 
   createScheduleExecutor_(
     vpc: ec2.IVpc,
+    vpcSecurityGroup: ec2.ISecurityGroup,
     imageTag: string,
     generateMenuQueue: sqs.IQueue,
     generateMenuPriorityQueue: sqs.IQueue,
@@ -451,11 +497,15 @@ export class WebServiceStack extends cdk.Stack {
         MENU_GENERATE_QUEUE_URL: generateMenuQueue.queueUrl,
         MENU_GENERATE_PRIORITY_QUEUE_URL: generateMenuPriorityQueue.queueUrl,
         MENU_GENERATE_ALTERNATIVES_QUEUE_URL: generateMenuAlternativesQueue.queueUrl,
+        OPEN_SEARCH_ENDPOINT: 'openSearchEndpoint'
       },
       memorySize: 512,
       timeout: cdk.Duration.seconds(this.sqsTimeout),
       vpc,
+      securityGroups: [vpcSecurityGroup]
     });
+
+    this.addCommonLambdaPolicies_(lambdaFunction);
 
     new events.Rule(this, 'ExecuteScheduleRule', {
       schedule: events.Schedule.rate(cdk.Duration.minutes(rateMin)),

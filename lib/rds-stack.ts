@@ -8,39 +8,36 @@ import { Construct } from 'constructs';
 
 export interface RdsStackProps extends cdk.StackProps {
   vpc: ec2.Vpc;
-  cluster: ecs_patterns.ApplicationLoadBalancedFargateService;
+  // cluster: ecs_patterns.ApplicationLoadBalancedFargateService;
   // ecsTaskRole: iam.Role;
-  menuGenerateConsumer: lambda.DockerImageFunction;
-  menuGenerateAlternativesConsumer: lambda.DockerImageFunction;
-  menuScheduler: lambda.DockerImageFunction;
-  scheduleExecutor: lambda.DockerImageFunction;
+  // menuGenerateConsumer: lambda.DockerImageFunction;
+  // menuGenerateAlternativesConsumer: lambda.DockerImageFunction;
+  // menuScheduler: lambda.DockerImageFunction;
+  // scheduleExecutor: lambda.DockerImageFunction;
 }
 
 export class RdsStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: RdsStackProps) {
     super(scope, id, props);
 
-    // create a bastion host accessible via EC2 Instance Connect
-    const host = new ec2.BastionHostLinux(this, 'BastionHost', {
-      vpc: props.vpc,
-      subnetSelection: { subnetType: ec2.SubnetType.PUBLIC },
-    });
-    // host.allowSshAccessFrom(ec2.Peer.ipv4('24.147.56.174/32'));
-    host.allowSshAccessFrom(ec2.Peer.ipv4('0.0.0.0/0'));
-
     const rdsInstance = this.createRdsInstance_(props.vpc);
-    const tcp3306 = ec2.Port.tcpRange(3306, 3306);
-    rdsInstance.connections.allowFrom(host, tcp3306, 'allow from bastion host');
+    this.createBastionHost_(rdsInstance, props.vpc);
 
-    rdsInstance.grantConnect(props.cluster.taskDefinition.taskRole);
-    rdsInstance.connections.allowFrom(props.cluster.service, tcp3306, 'allow from ecs service');
-    rdsInstance.connections.allowFrom(props.menuGenerateConsumer, tcp3306, 'allow from menu-generate lambda');
-    rdsInstance.connections.allowFrom(props.menuGenerateAlternativesConsumer, tcp3306, 'allow from menu-generate-alternatives lambda');
-    rdsInstance.connections.allowFrom(props.menuScheduler, tcp3306, 'allow from schedule-menu lambda');
-    rdsInstance.connections.allowFrom(props.scheduleExecutor, tcp3306, 'allow from execute-schedule lambda');
+    // configure network access: VPC default security group
+    // const defaultSecurityGroup = ec2.SecurityGroup.fromSecurityGroupId(this, 'DefaultSecurityGroup', props.vpc.vpcDefaultSecurityGroup);
+    // rdsInstance.connections.addSecurityGroup(defaultSecurityGroup);
+
+    // rdsInstance.grantConnect(props.cluster.taskDefinition.taskRole);
+    // rdsInstance.connections.allowFrom(props.cluster.service, tcp3306, 'allow from ecs service');
+    // rdsInstance.connections.allowFrom(props.menuGenerateConsumer, tcp3306, 'allow from menu-generate lambda');
+    // rdsInstance.connections.allowFrom(props.menuGenerateAlternativesConsumer, tcp3306, 'allow from menu-generate-alternatives lambda');
+    // rdsInstance.connections.allowFrom(props.menuScheduler, tcp3306, 'allow from schedule-menu lambda');
+    // rdsInstance.connections.allowFrom(props.scheduleExecutor, tcp3306, 'allow from execute-schedule lambda');
   }
 
-  createRdsInstance_(vpc: ec2.IVpc): rds.DatabaseInstance {
+  createRdsInstance_(vpc: ec2.Vpc): rds.DatabaseInstance {
+    const defaultSecurityGroup = ec2.SecurityGroup.fromSecurityGroupId(this, 'DefaultSecurityGroup', vpc.vpcDefaultSecurityGroup);
+
     return new rds.DatabaseInstance(this, 'SymfonyDb', {
       engine: rds.DatabaseInstanceEngine.mysql({
         version: rds.MysqlEngineVersion.VER_5_7_38,
@@ -51,10 +48,27 @@ export class RdsStack extends cdk.Stack {
       // instanceType: ec2.InstanceType.of(ec2.InstanceClass.BURSTABLE3, ec2.InstanceSize.SMALL),
       credentials: rds.Credentials.fromGeneratedSecret('admin'), // Optional - will default to 'admin' username and generated password
       vpc,
+      securityGroups: [defaultSecurityGroup],
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       storageEncrypted: true,
       monitoringInterval: cdk.Duration.seconds(60),
       publiclyAccessible: false,
     });
+  }
+
+  createBastionHost_(rdsInstance: rds.DatabaseInstance, vpc: ec2.Vpc): ec2.BastionHostLinux {
+    const host = new ec2.BastionHostLinux(this, 'BastionHost', {
+      vpc,
+      subnetSelection: { subnetType: ec2.SubnetType.PUBLIC },
+    });
+    // host.allowSshAccessFrom(ec2.Peer.ipv4('24.147.56.174/32'));
+    host.allowSshAccessFrom(ec2.Peer.ipv4('0.0.0.0/0'));
+    host.role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonElasticFileSystemClientReadWriteAccess'));
+
+    // bastion host is not in VPC default security group
+    const tcp3306 = ec2.Port.tcpRange(3306, 3306);
+    rdsInstance.connections.allowFrom(host, tcp3306, 'allow from bastion host');
+
+    return host;
   }
 }

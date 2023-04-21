@@ -2,8 +2,8 @@
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { VpcStack } from '../lib/vpc-stack';
+import { RdsStack } from '../lib/rds-stack';
 import { WebServiceStack } from '../lib/web-service-stack';
-import { OpenSearchStack } from '../lib/opensearch-stack';
 
 const app = new cdk.App();
 const vpcStack = new VpcStack(app, 'VpcStack', {
@@ -22,13 +22,12 @@ const vpcStack = new VpcStack(app, 'VpcStack', {
   /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
 });
 
-const ecsCluster = new WebServiceStack(app, 'WebServiceStack', {
+const rdsStack = new RdsStack(app, 'RdsStack', {
   env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
   vpc: vpcStack.vpc
 });
 
-const opensearch = new OpenSearchStack(app, 'OpenSearchStack', {
+const webServiceStack = new WebServiceStack(app, 'WebServiceStack', {
   env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
-  vpc: vpcStack.vpc,
-  identity: ecsCluster.identity
+  vpc: vpcStack.vpc
 });

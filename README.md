@@ -38,5 +38,7 @@ The `cdk.json` file tells the CDK Toolkit how to execute your app.
 ## 2. deploy stacks to AWS OU (Linux/bash)
 
 `[aws_cdk]$ AWS_KEY_ID={symfony_iam_key_id} \`
+
 `AWS_KEY_SECRET={symfony_iam_key_isecret} \`
+
 `cdk deploy [--all | WebServiceStack] --profile devuser`

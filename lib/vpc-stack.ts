@@ -24,6 +24,11 @@ export class VpcStack extends cdk.Stack {
       natGateways: 1,
     });
 
+    // Create VPC endpoints for common services.
+    vpc.addGatewayEndpoint("dynamoDBEndpoint", {
+      service: ec2.GatewayVpcEndpointAwsService.DYNAMODB,
+    })
+
     this.vpc = vpc;
   }
 }
