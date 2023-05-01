@@ -12,7 +12,6 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as os from 'aws-cdk-lib/aws-opensearchservice';
-import * as rds from 'aws-cdk-lib/aws-rds';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as r53_targets from 'aws-cdk-lib/aws-route53-targets';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
@@ -33,6 +32,7 @@ export class WebServiceStack extends cdk.Stack {
     super(scope, id, props);
     const account: string = props.env ? (props.env.account || '') : (process.env.CDK_DEFAULT_ACCOUNT || '');
     const envConfig: IEnvironmentConfig = scope.node.tryGetContext(account);
+    const accountId = cdk.Aws.ACCOUNT_ID;
 
     // Use SQS managed server side encryption (SSE-SQS)
     const generateMenuQueue = new sqs.Queue(this, 'generate_menu', {
@@ -50,7 +50,8 @@ export class WebServiceStack extends cdk.Stack {
 
     const defaultSecurityGroup = ec2.SecurityGroup.fromSecurityGroupId(this, 'DefaultSecurityGroup', props.vpc.vpcDefaultSecurityGroup);
     const ecsTaskRole = this.createEcsTaskRole_();
-    const openSearchDomain = this.createOpenSearchDomain_(props.vpc, defaultSecurityGroup, ecsTaskRole);
+    const webServiceUserGroup = iam.Group.fromGroupArn(this, 'WebServiceUserGroup', `arn:aws:iam::${accountId}:group/web-services`);
+    const openSearchDomain = this.createOpenSearchDomain_(props.vpc, defaultSecurityGroup, ecsTaskRole, webServiceUserGroup);
     const fileSystem = this.createEfs_(props.vpc);
     const efsAccessPoint = this.createEfsAccessPoint_(fileSystem);
 
@@ -166,14 +167,18 @@ export class WebServiceStack extends cdk.Stack {
   createOpenSearchDomain_(
     vpc: ec2.IVpc,
     vpcSecurityGroup: ec2.ISecurityGroup,
-    identity: iam.IGrantable
+    identity: iam.IGrantable,
+    userGroup: iam.IGroup
   ): os.Domain {
     const domainProps: os.DomainProps = {
-      version: os.EngineVersion.OPENSEARCH_2_3,
+      version: os.EngineVersion.ELASTICSEARCH_7_1,  // backward compatibility with WebService@aws-0.0.96
       useUnsignedBasicAuth: true,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       vpc,
       securityGroups: [vpcSecurityGroup],
+      //fineGrainedAccessControl: {
+      //  masterUserArn: 'arn:aws:iam::962199888341:user/web-service'
+      //},
       capacity: {
         dataNodes: 2,
       },
@@ -191,8 +196,8 @@ export class WebServiceStack extends cdk.Stack {
     };
 
     const domain = new os.Domain(this, 'recipes', domainProps);
-    domain.grantRead(identity);
-    domain.grantWrite(identity);
+    domain.grantReadWrite(identity);
+    domain.grantReadWrite(userGroup);
 
     return domain;
   }
@@ -275,7 +280,7 @@ export class WebServiceStack extends cdk.Stack {
         MENU_GENERATE_QUEUE_URL: generateMenuQueueUrl,
         MENU_GENERATE_PRIORITY_QUEUE_URL: generateMenuPriorityQueueUrl,
         MENU_GENERATE_ALTERNATIVES_QUEUE_URL: generateMenuAlternativesQueueUrl,
-        OPEN_SEARCH_ENDPOINT: openSearchEndpoint
+        OPEN_SEARCH_ENDPOINT: `https://${openSearchEndpoint}`
       },
       logging: logDriver
     });

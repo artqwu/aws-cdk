@@ -15,14 +15,18 @@ The `cdk.json` file tells the CDK Toolkit how to execute your app.
 
 ## Fixed infrastructure
 - OU
-- users
+- IAM user group 'web-services' with user 'web-service' with polcies
+- - 
 - Route 53
 - Certificate Manager: certificate
 - ECR
+- Secrets Manager: RDS symfony user password, auth credentials
 
 ## Platform
 
-- VpcWithALBAndECS: VPC, ALB, ECS Fargate cluster
+- VpcStack: VPC, gateway endpoints
+- RdsStack: RDS, bastion host
+- WebServiceStack: ECS Fargate cluster, ALB, ECS service, SQS, Lambda functions, EFS, Opensearch
 
 
 # Build and deploy platform
@@ -41,4 +45,45 @@ The `cdk.json` file tells the CDK Toolkit how to execute your app.
 
 `AWS_KEY_SECRET={symfony_iam_key_isecret} \`
 
-`cdk deploy [--all | WebServiceStack] --profile devuser`
+`cdk deploy [--all | VpcStack | RdsStack | WebServiceStack] --profile devuser`
+
+# Bastion Host connect options
+## 1. connect to bastion host using SSM in Windows
+
+`[\]> aws ssm start-session --target {EC2 instance ID} --profile devuser`
+
+## 2. connect  to remote host using SSM in Windows (Opensearch)
+
+`[\]> aws ssm start-session --target {EC2 instance ID} --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters host="{Opensearch host}",portNumber="443",localPortNumber="9200" --profile devuser
+`
+
+open browser to https://localhost:9200
+
+## 3. EC2 Instance Connect for terminal or remote host (MySQL)
+
+`[/.ssh]$ aws ec2-instance-connect send-ssh-public-key --instance-id {EC2 instance ID} --availability-zone us-east-2a --instance-os-user ec2-user --ssh-public-key file://dev-bastion-key.pub --profile devuser
+`
+
+open SSH session or MySQL Workbench proxy to EC2 instance host (user: ec2-user)
+
+
+# Using ECS exec to connect to an ECS task
+
+## 1. enable ECS exec on ECS service
+
+`[\]> aws ecs update-service --cluster {ECS cluster name} --service {service name} --enable-execute-command --force-new-deployment --profile devuser`
+
+## 2. confirm exec command enabled
+`[\]> aws ecs describe-tasks --cluster [cluster name] --tasks [task arn] --profile devuser`
+
+
+## 3. open bash terminal to ECS task using ECS exec
+
+`[\]> aws ecs execute-command --cluster {ECS cluster name} --task {task arn} --container {container name} --interactive --command "/bin/bash" --profile devuser`
+`
+
+ex:
+
+`
+[\]> aws ecs execute-command --cluster WebServiceStack-WebServiceCluster7DA3FC56-iUugBhnPkXWz --task arn:aws:ecs:us-east-2:962199888341:task/WebServiceStack-WebServiceCluster7DA3FC56-iUugBhnPkXWz/e1f2e0527f114780b6f924540cafe872 --container WebContainer --interactive --command "/bin/bash" --profile devuser
+`

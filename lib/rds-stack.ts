@@ -20,8 +20,10 @@ export class RdsStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: RdsStackProps) {
     super(scope, id, props);
 
-    const rdsInstance = this.createRdsInstance_(props.vpc);
-    this.createBastionHost_(rdsInstance, props.vpc);
+    const defaultSecurityGroup = ec2.SecurityGroup.fromSecurityGroupId(this, 'DefaultSecurityGroup', props.vpc.vpcDefaultSecurityGroup);
+
+    const rdsInstance = this.createRdsInstance_(props.vpc, defaultSecurityGroup);
+    this.createBastionHost_(rdsInstance, props.vpc, defaultSecurityGroup);
 
     // configure network access: VPC default security group
     // const defaultSecurityGroup = ec2.SecurityGroup.fromSecurityGroupId(this, 'DefaultSecurityGroup', props.vpc.vpcDefaultSecurityGroup);
@@ -35,9 +37,7 @@ export class RdsStack extends cdk.Stack {
     // rdsInstance.connections.allowFrom(props.scheduleExecutor, tcp3306, 'allow from execute-schedule lambda');
   }
 
-  createRdsInstance_(vpc: ec2.Vpc): rds.DatabaseInstance {
-    const defaultSecurityGroup = ec2.SecurityGroup.fromSecurityGroupId(this, 'DefaultSecurityGroup', vpc.vpcDefaultSecurityGroup);
-
+  createRdsInstance_(vpc: ec2.Vpc, defaultSecurityGroup: ec2.ISecurityGroup): rds.DatabaseInstance {
     return new rds.DatabaseInstance(this, 'SymfonyDb', {
       engine: rds.DatabaseInstanceEngine.mysql({
         version: rds.MysqlEngineVersion.VER_5_7_38,
@@ -56,18 +56,17 @@ export class RdsStack extends cdk.Stack {
     });
   }
 
-  createBastionHost_(rdsInstance: rds.DatabaseInstance, vpc: ec2.Vpc): ec2.BastionHostLinux {
+  createBastionHost_(rdsInstance: rds.DatabaseInstance, vpc: ec2.Vpc, defaultSecurityGroup: ec2.ISecurityGroup): ec2.BastionHostLinux {
     const host = new ec2.BastionHostLinux(this, 'BastionHost', {
       vpc,
+      securityGroup: defaultSecurityGroup,
       subnetSelection: { subnetType: ec2.SubnetType.PUBLIC },
     });
     // host.allowSshAccessFrom(ec2.Peer.ipv4('24.147.56.174/32'));
     host.allowSshAccessFrom(ec2.Peer.ipv4('0.0.0.0/0'));
+    host.role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'));
     host.role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonElasticFileSystemClientReadWriteAccess'));
-
-    // bastion host is not in VPC default security group
-    const tcp3306 = ec2.Port.tcpRange(3306, 3306);
-    rdsInstance.connections.allowFrom(host, tcp3306, 'allow from bastion host');
+    host.role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonOpenSearchServiceFullAccess'));
 
     return host;
   }

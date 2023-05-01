@@ -6,6 +6,7 @@ import { RdsStack } from '../lib/rds-stack';
 import { WebServiceStack } from '../lib/web-service-stack';
 
 const app = new cdk.App();
+
 const vpcStack = new VpcStack(app, 'VpcStack', {
   /* If you don't specify 'env', this stack will be environment-agnostic.
    * Account/Region-dependent features and context lookups will not work,
