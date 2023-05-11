@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
@@ -52,6 +53,7 @@ export class WebServiceStack extends cdk.Stack {
     const ecsTaskRole = this.createEcsTaskRole_();
     const webServiceUserGroup = iam.Group.fromGroupArn(this, 'WebServiceUserGroup', `arn:aws:iam::${accountId}:group/web-services`);
     const openSearchDomain = this.createOpenSearchDomain_(props.vpc, defaultSecurityGroup, ecsTaskRole, webServiceUserGroup);
+    const dynamoDbTable = this.createDynamoDbTable_(ecsTaskRole, webServiceUserGroup, envConfig.symfonyEnv);
     const fileSystem = this.createEfs_(props.vpc);
     const efsAccessPoint = this.createEfsAccessPoint_(fileSystem);
 
@@ -196,8 +198,8 @@ export class WebServiceStack extends cdk.Stack {
     };
 
     const domain = new os.Domain(this, 'recipes', domainProps);
-    domain.grantReadWrite(identity);
-    domain.grantReadWrite(userGroup);
+    domain.grantReadWrite(identity);  // web service
+    domain.grantReadWrite(userGroup); // utilities
 
     return domain;
   }
@@ -511,5 +513,22 @@ export class WebServiceStack extends cdk.Stack {
     });
 
     return lambdaFunction;
+  }
+
+  createDynamoDbTable_(
+    identity: iam.IGrantable,
+    userGroup: iam.IGroup,
+    symfonyEnv: string,
+  ): void {
+    const table = new dynamodb.Table(this, 'DynamoDbLogsTable', {
+      partitionKey: { name: 'logId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'timestamp', type: dynamodb.AttributeType.NUMBER },
+      tableClass: dynamodb.TableClass.STANDARD_INFREQUENT_ACCESS,
+      tableName: `Logs_${symfonyEnv}`,
+      timeToLiveAttribute: 'expiration',  // ref: dd_backend_symfony DataStoreBundle\Services\DynamoDbRepository::addExpiration()
+    });
+
+    table.grantReadData(identity);  // web service
+    table.grantReadWriteData(userGroup);  // lambda function
   }
 }

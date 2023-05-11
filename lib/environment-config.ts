@@ -6,4 +6,5 @@ export interface IEnvironmentConfig {
     readonly domain: string,
     readonly hostedZoneId: string,
     readonly certArn: string,
+    readonly symfonyEnv: string,
 }

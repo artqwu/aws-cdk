@@ -16,7 +16,7 @@ The `cdk.json` file tells the CDK Toolkit how to execute your app.
 ## Fixed infrastructure
 - OU
 - IAM user group 'web-services' with user 'web-service' with polcies
-- - 
+- -
 - Route 53
 - Certificate Manager: certificate
 - ECR
@@ -43,28 +43,28 @@ The `cdk.json` file tells the CDK Toolkit how to execute your app.
 
 `[aws_cdk]$ AWS_KEY_ID={symfony_iam_key_id} \`
 
-`AWS_KEY_SECRET={symfony_iam_key_isecret} \`
+`AWS_KEY_SECRET={symfony_iam_key_secret} \`
 
 `cdk deploy [--all | VpcStack | RdsStack | WebServiceStack] --profile devuser`
 
 # Bastion Host connect options
-## 1. connect to bastion host using SSM in Windows
+## 1. open shell to bastion host using SSM in Windows
 
 `[\]> aws ssm start-session --target {EC2 instance ID} --profile devuser`
 
-## 2. connect  to remote host using SSM in Windows (Opensearch)
+## 2. connect to remote host using SSM in Windows (Kibana/Opensearch)
 
 `[\]> aws ssm start-session --target {EC2 instance ID} --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters host="{Opensearch host}",portNumber="443",localPortNumber="9200" --profile devuser
 `
 
-open browser to https://localhost:9200
+Kibana: open browser to https://localhost:9200/_plugin/kibana/app/kibana
 
 ## 3. EC2 Instance Connect for terminal or remote host (MySQL)
 
 `[/.ssh]$ aws ec2-instance-connect send-ssh-public-key --instance-id {EC2 instance ID} --availability-zone us-east-2a --instance-os-user ec2-user --ssh-public-key file://dev-bastion-key.pub --profile devuser
 `
 
-open SSH session or MySQL Workbench proxy to EC2 instance host (user: ec2-user)
+open shell session or MySQL Workbench proxy to EC2 instance host (user: ec2-user)
 
 
 # Using ECS exec to connect to an ECS task
@@ -77,7 +77,7 @@ open SSH session or MySQL Workbench proxy to EC2 instance host (user: ec2-user)
 `[\]> aws ecs describe-tasks --cluster [cluster name] --tasks [task arn] --profile devuser`
 
 
-## 3. open bash terminal to ECS task using ECS exec
+## 3. open bash shell to ECS task using ECS exec
 
 `[\]> aws ecs execute-command --cluster {ECS cluster name} --task {task arn} --container {container name} --interactive --command "/bin/bash" --profile devuser`
 `
