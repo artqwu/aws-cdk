@@ -47,6 +47,11 @@ The `cdk.json` file tells the CDK Toolkit how to execute your app.
 
 `cdk deploy [--all | VpcStack | RdsStack | WebServiceStack] --profile devuser`
 
+### to force deploy of new images from ECR, change 'imageTag' in cdk.context.json from 'latest' to the specific version
+
+`"imageTag": "0.0.88",`
+
+`"imageTag": "latest",`
 # Bastion Host connect options
 ## 1. open shell to bastion host using SSM in Windows
 
